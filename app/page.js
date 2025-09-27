@@ -19,15 +19,13 @@ import {
 // --- Firebase設定 ---
 // 重要：以下の placeholder（"YOUR_..."）部分を、
 // あなたのFirebaseプロジェクトの設定値に書き換えてください。
-// Firebaseコンソールの「プロジェクトの概要」→「プロジェクトの設定」(歯車アイコン)
-// →「全般」タブの中にある「マイアプリ」セクションから確認できます。
 const firebaseConfig = {
-  apiKey: "YOUR_API_KEY", // 例: "AIzaSyB..."
-  authDomain: "YOUR_AUTH_DOMAIN", // 例: "your-project-id.firebaseapp.com"
-  projectId: "YOUR_PROJECT_ID", // 例: "your-project-id"
-  storageBucket: "YOUR_STORAGE_BUCKET", // 例: "your-project-id.appspot.com"
-  messagingSenderId: "YOUR_MESSAGING_SENDER_ID", // 例: "1234567890"
-  appId: "YOUR_APP_ID" // 例: "1:1234567890:web:abcdef123456"
+  apiKey: "AIzaSyBLN8Vg5oPNa-1VpqzemAGQOPlyEOr1JU8",
+  authDomain: "expense-tracker-2024-9a562.firebaseapp.com",
+  projectId: "expense-tracker-2024-9a562",
+  storageBucket: "expense-tracker-2024-9a562.firebasestorage.app",
+  messagingSenderId: "811729551695",
+  appId: "1:811729551695:web:64860512a3b406a460053a"
 };
 
 // --- Firebase初期化 ---
@@ -187,17 +185,31 @@ function InputTab() {
     
     const handleSubmit = async (e) => {
         e.preventDefault();
+        
+        // --- ▼ここからが修正箇所▼ ---
+        const amountNumber = parseFloat(formData.amount);
+
+        if (!formData.item || !formData.date) {
+            alert('品名と日付は必須バニ！');
+            return;
+        }
+        
+        if (isNaN(amountNumber) || amountNumber <= 0) {
+            alert('金額には0より大きい半角数字を入力するバニ！');
+            return;
+        }
+        // --- ▲ここまでが修正箇所▲ ---
+
         if (!db) {
-            alert('データベースに接続できません。Firebaseの設定を確認してください。'); return;
+            alert('データベースに接続できません。Firebaseの設定を確認してください。');
+            return;
         }
-        if (!formData.item || !formData.amount || !formData.date) {
-            alert('品名、金額、日付は必須バニ！'); return;
-        }
+
         setIsSubmitting(true);
         try {
             await addDoc(collection(db, "expenses"), {
                 ...formData,
-                amount: Number(formData.amount),
+                amount: amountNumber, // 正しい数値に変換したものを保存
                 createdAt: new Date()
             });
             setMessage('登録完了バニ！');
@@ -478,6 +490,5 @@ function HistoryTab({ expenses, settlements }) {
         </div>
     );
 }
-
 
 
