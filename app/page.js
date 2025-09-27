@@ -40,11 +40,13 @@ try {
 
 
 // --- 定数データ ---
+// スクリーンショットを元にカテゴリデータを更新
 const CATEGORY_DATA = {
-    '食費': { '食材': '消費', '外食': '浪費' },
+    '食費': { '食材': '消費', '外食': '浪費', 'その他': '消費' },
     '日用品': { 'キッチン': '消費', 'トイレ': '消費', '洗面所': '消費', '風呂': '消費', '掃除': '消費', '医薬品': '投資', '家具': '消費', 'その他': '消費' },
     '健康': { '病院': '投資', 'スポーツ': '投資', 'その他': '投資' },
-    '娯楽': { '交通費': '浪費', '施設費': '浪費', '買い物': '浪費', 'サブスク': '浪費', '家具': '浪費', '入場料': '浪費', 'その他': '浪費' }
+    '娯楽': { '交通費': '浪費', 'ホテル代': '浪費', '買い物': '浪費', 'サブスク': '浪費', '家具': '浪費', '入場料': '浪費', 'その他': '浪費' },
+    'その他': { 'お土産': '消費', 'ペット': '消費', 'ホテル代': '消費', '光熱費': '消費', 'その他': '消費' }
 };
 const PAYERS = ['久喜さん', '真那実さん'];
 const CHART_COLORS = ['#8884d8', '#82ca9d', '#ffc658', '#ff8042', '#0088FE', '#00C49F', '#FFBB28', '#FF6B6B'];
@@ -165,9 +167,9 @@ function InputTab() {
     const [message, setMessage] = useState('');
 
     useEffect(() => {
-        const subCategories = Object.keys(CATEGORY_DATA[formData.majorCategory]);
-        const newSubCategory = subCategories[0];
-        const newPurpose = CATEGORY_DATA[formData.majorCategory][newSubCategory];
+        const subCategories = Object.keys(CATEGORY_DATA[formData.majorCategory] || {});
+        const newSubCategory = subCategories[0] || '';
+        const newPurpose = newSubCategory ? CATEGORY_DATA[formData.majorCategory][newSubCategory] : '';
         setFormData(prev => ({
             ...prev,
             subCategory: newSubCategory,
@@ -186,7 +188,6 @@ function InputTab() {
     const handleSubmit = async (e) => {
         e.preventDefault();
         
-        // --- ▼ここからが修正箇所▼ ---
         const amountNumber = parseFloat(formData.amount);
 
         if (!formData.item || !formData.date) {
@@ -198,7 +199,6 @@ function InputTab() {
             alert('金額には0より大きい半角数字を入力するバニ！');
             return;
         }
-        // --- ▲ここまでが修正箇所▲ ---
 
         if (!db) {
             alert('データベースに接続できません。Firebaseの設定を確認してください。');
@@ -209,11 +209,10 @@ function InputTab() {
         try {
             await addDoc(collection(db, "expenses"), {
                 ...formData,
-                amount: amountNumber, // 正しい数値に変換したものを保存
+                amount: amountNumber,
                 createdAt: new Date()
             });
             setMessage('登録完了バニ！');
-            // Reset form
             setFormData({
                 payer: PAYERS[0], date: new Date().toISOString().split('T')[0], item: '', amount: '', ratio: 5, majorCategory: '食費', subCategory: '食材', purpose: '消費'
             });
@@ -255,7 +254,7 @@ function InputTab() {
                 </FormRow>
                 <FormRow label="種別" question="出費の種別は何バニか？">
                     <select value={formData.subCategory} onChange={e => handleChange('subCategory', e.target.value)} className="form-select w-full">
-                        {Object.keys(CATEGORY_DATA[formData.majorCategory]).map(sub => <option key={sub} value={sub}>{sub}</option>)}
+                        {Object.keys(CATEGORY_DATA[formData.majorCategory] || {}).map(sub => <option key={sub} value={sub}>{sub}</option>)}
                     </select>
                 </FormRow>
                 <FormRow label="目的" question="目的は何バニか？">
@@ -290,8 +289,10 @@ function PeriodSelector({ period, setPeriod, expenses }) {
 
     const handleStartChange = (field, value) => {
         const newPeriod = { ...period, [field]: value };
-        newPeriod.endYear = newPeriod.startYear;
-        newPeriod.endMonth = newPeriod.startMonth;
+        if (newPeriod.startYear > newPeriod.endYear || (newPeriod.startYear === newPeriod.endYear && newPeriod.startMonth > newPeriod.endMonth)) {
+            newPeriod.endYear = newPeriod.startYear;
+            newPeriod.endMonth = newPeriod.startMonth;
+        }
         setPeriod(newPeriod);
     };
 
@@ -316,11 +317,15 @@ function InquiryTab({ expenses }) {
     });
 
     const filteredExpenses = useMemo(() => {
+        // --- ▼ここからが日付修正箇所▼ ---
         const startDate = new Date(period.startYear, period.startMonth - 1, 1);
-        const endDate = new Date(period.endYear, period.endMonth, 0);
+        const endDate = new Date(period.endYear, period.endMonth, 0, 23, 59, 59); // 月末日の23:59:59に設定
+        // --- ▲ここまでが日付修正箇所▲ ---
         return expenses.filter(ex => {
             const exDate = new Date(ex.date);
-            return exDate >= startDate && exDate <= endDate;
+            // タイムゾーンを考慮するため、入力された日付文字列をUTCとして解釈し直す
+            const adjustedExDate = new Date(exDate.getUTCFullYear(), exDate.getUTCMonth(), exDate.getUTCDate());
+            return adjustedExDate >= startDate && adjustedExDate <= endDate;
         });
     }, [expenses, period]);
     
@@ -341,7 +346,8 @@ function InquiryTab({ expenses }) {
 
     const prepareChartData = useCallback((key) => {
         const dataMap = filteredExpenses.reduce((acc, ex) => {
-            acc[ex[key]] = (acc[ex[key]] || 0) + ex.amount;
+            const value = ex[key] || "未分類";
+            acc[value] = (acc[value] || 0) + ex.amount;
             return acc;
         }, {});
         return Object.entries(dataMap).map(([name, value]) => ({ name, value }));
@@ -392,11 +398,15 @@ function HistoryTab({ expenses, settlements }) {
     const [selectedIds, setSelectedIds] = useState(new Set());
 
     const filteredExpenses = useMemo(() => {
+        // --- ▼ここからが日付修正箇所▼ ---
         const startDate = new Date(period.startYear, period.startMonth - 1, 1);
-        const endDate = new Date(period.endYear, period.endMonth, 0);
+        const endDate = new Date(period.endYear, period.endMonth, 0, 23, 59, 59); // 月末日の23:59:59に設定
+        // --- ▲ここまでが日付修正箇所▲ ---
         return expenses.filter(ex => {
             const exDate = new Date(ex.date);
-            return exDate >= startDate && exDate <= endDate;
+            // タイムゾーンを考慮するため、入力された日付文字列をUTCとして解釈し直す
+            const adjustedExDate = new Date(exDate.getUTCFullYear(), exDate.getUTCMonth(), exDate.getUTCDate());
+            return adjustedExDate >= startDate && adjustedExDate <= endDate;
         });
     }, [expenses, period]);
 
@@ -414,7 +424,7 @@ function HistoryTab({ expenses, settlements }) {
     
     const handleDelete = async () => {
         if (selectedIds.size === 0 || !db) return;
-        if (confirm(`${selectedIds.size}件のデータを削除しますか？`)) {
+        if (window.confirm(`${selectedIds.size}件のデータを削除しますか？`)) {
             const batch = writeBatch(db);
             selectedIds.forEach(id => batch.delete(doc(db, "expenses", id)));
             await batch.commit();
