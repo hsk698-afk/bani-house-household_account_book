@@ -13,12 +13,14 @@ import {
     query, 
     orderBy, 
     writeBatch,
-    setDoc
+    setDoc,
+    updateDoc,
+    where,
+    getDocs
 } from 'firebase/firestore';
 
 // --- Firebase設定 ---
-// 重要：以下の placeholder（"YOUR_..."）部分を、
-// あなたのFirebaseプロジェクトの設定値に書き換えてください。
+// ユーザー指定のFirebase Configに更新
 const firebaseConfig = {
   apiKey: "AIzaSyBLN8Vg5oPNa-1VpqzemAGQOPlyEOr1JU8",
   authDomain: "expense-tracker-2024-9a562.firebaseapp.com",
@@ -38,18 +40,27 @@ try {
     db = null;
 }
 
-
 // --- 定数データ ---
 // スクリーンショットを元にカテゴリデータを更新
 const CATEGORY_DATA = {
     '食費': { '食材': '消費', '外食': '浪費', 'その他': '消費' },
-    '日用品': { 'キッチン': '消費', 'トイレ': '消費', '洗面所': '消費', '風呂': '消費', '掃除': '消費', '医薬品': '投資', '家具': '消費', 'その他': '消費' },
-    '健康': { '病院': '投資', 'スポーツ': '投資', 'その他': '投資' },
+    '日用品': { 'キッチン': '消費', 'トイレ': '消費', '洗面所': '消費', '風呂': '消費', '掃除': '消費', '家具': '消費', '衣服': '消費', 'その他': '消費' },
+    '健康': { '病院': '投資', 'スポーツ': '投資', '医薬品': '投資', 'その他': '投資' },
     '娯楽': { '交通費': '浪費', 'ホテル代': '浪費', '買い物': '浪費', 'サブスク': '浪費', '家具': '浪費', '入場料': '浪費', 'その他': '浪費' },
-    'その他': { 'お土産': '消費', 'ペット': '消費', 'ホテル代': '消費', '光熱費': '消費', 'その他': '消費' }
+    'その他': { 'お土産': '消費', 'ペット': '消費', 'ホテル代': '消費', '交通費': '消費', '本': '投資', '光熱費': '消費', 'その他': '消費' }
 };
+
 const PAYERS = ['久喜さん', '真那実さん'];
+const PURPOSES = ['消費', '浪費', '投資'];
 const CHART_COLORS = ['#8884d8', '#82ca9d', '#ffc658', '#ff8042', '#0088FE', '#00C49F', '#FFBB28', '#FF6B6B'];
+
+// 固定費データ
+const FIXED_EXPENSES = [
+    { payer: '久喜さん', item: 'U-NEXT', amount: 2189, ratio: 5, majorCategory: '娯楽', subCategory: 'サブスク', purpose: '浪費' },
+    { payer: '久喜さん', item: 'Netflix', amount: 1590, ratio: 5, majorCategory: '娯楽', subCategory: 'サブスク', purpose: '浪費' },
+    { payer: '久喜さん', item: 'Disney Plus', amount: 1037, ratio: 5, majorCategory: '娯楽', subCategory: 'サブスク', purpose: '浪費' },
+    { payer: '久喜さん', item: 'ドコモ光', amount: 5720, ratio: 5, majorCategory: 'その他', subCategory: '光熱費', purpose: '投資' }
+];
 
 
 // --- Barneyコンポーネント ---
@@ -80,6 +91,43 @@ export default function KakeiboApp() {
     const [settlements, setSettlements] = useState({});
     const [loading, setLoading] = useState(true);
     const [firebaseError, setFirebaseError] = useState(false);
+    const [editingExpense, setEditingExpense] = useState(null); // 編集中の支出データ
+
+    // 固定費自動登録処理
+    const addFixedExpensesForCurrentMonth = useCallback(async () => {
+        if (!db) return;
+        const now = new Date();
+        // 2025年8月以降にのみ実行
+        if (now.getFullYear() < 2025 || (now.getFullYear() === 2025 && now.getMonth() < 7)) {
+            return;
+        }
+
+        const year = now.getFullYear();
+        const month = now.getMonth() + 1;
+        const monthStr = `${year}-${String(month).padStart(2, '0')}`;
+        
+        for (const fixedExpense of FIXED_EXPENSES) {
+            const expenseIdentifier = `${monthStr}-${fixedExpense.item}`;
+            const q = query(collection(db, 'expenses'), where('identifier', '==', expenseIdentifier));
+            const querySnapshot = await getDocs(q);
+
+            if (querySnapshot.empty) {
+                // まだ登録されていない場合のみ追加
+                const date = `${monthStr}-01`;
+                try {
+                    await addDoc(collection(db, 'expenses'), {
+                        ...fixedExpense,
+                        date: date,
+                        identifier: expenseIdentifier, // 識別子を追加
+                        createdAt: new Date(),
+                    });
+                    console.log(`${fixedExpense.item} for ${monthStr} has been added.`);
+                } catch (error) {
+                    console.error("Error adding fixed expense:", error);
+                }
+            }
+        }
+    }, []);
 
     // Firebaseからデータをリアルタイムで購読
     useEffect(() => {
@@ -89,6 +137,9 @@ export default function KakeiboApp() {
             setFirebaseError(true);
             return;
         };
+
+        addFixedExpensesForCurrentMonth();
+
         const expensesQuery = query(collection(db, "expenses"), orderBy("date", "desc"));
         const unsubscribeExpenses = onSnapshot(expensesQuery, (snapshot) => {
             const expensesData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -115,16 +166,25 @@ export default function KakeiboApp() {
             unsubscribeExpenses();
             unsubscribeSettlements();
         };
-    }, []);
+    }, [addFixedExpensesForCurrentMonth]);
+
+    const handleEdit = (expense) => {
+        setEditingExpense(expense);
+        setActiveTab('input'); // 編集時に自動で入力タブに移動
+    };
+
+    const handleClearEditing = () => {
+        setEditingExpense(null);
+    };
 
     const renderContent = () => {
         if (firebaseError) return <div className="text-center p-10 text-red-500 font-bold">Firebaseの接続設定を確認してください。</div>
         if (loading) return <div className="text-center p-10">データを読み込み中...</div>;
 
         switch (activeTab) {
-            case 'input': return <InputTab />;
+            case 'input': return <InputTab editingExpense={editingExpense} onClearEditing={handleClearEditing} />;
             case 'inquiry': return <InquiryTab expenses={expenses} />;
-            case 'history': return <HistoryTab expenses={expenses} settlements={settlements} />;
+            case 'history': return <HistoryTab expenses={expenses} settlements={settlements} onEdit={handleEdit} />;
             default: return null;
         }
     };
@@ -141,7 +201,7 @@ export default function KakeiboApp() {
                     {['input', 'inquiry', 'history'].map(tab => (
                         <button key={tab} onClick={() => setActiveTab(tab)}
                             className={`px-6 py-3 text-lg font-bold rounded-t-lg transition-colors duration-300 ${activeTab === tab ? 'bg-purple-500 text-white shadow-lg' : 'bg-white text-purple-500 hover:bg-purple-100'}`}>
-                            { {input: '入力', inquiry: '照会', history: '履歴'}[tab] }
+                            { {input: '入力/編集', inquiry: '照会', history: '履歴'}[tab] }
                         </button>
                     ))}
                 </nav>
@@ -151,8 +211,8 @@ export default function KakeiboApp() {
     );
 }
 
-// --- 入力タブ ---
-function InputTab() {
+// --- 入力/編集タブ ---
+function InputTab({ editingExpense, onClearEditing }) {
     const [formData, setFormData] = useState({
         payer: PAYERS[0],
         date: new Date().toISOString().split('T')[0],
@@ -165,22 +225,51 @@ function InputTab() {
     });
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [message, setMessage] = useState('');
+    
+    const isEditing = !!editingExpense;
 
     useEffect(() => {
-        const subCategories = Object.keys(CATEGORY_DATA[formData.majorCategory] || {});
-        const newSubCategory = subCategories[0] || '';
-        const newPurpose = newSubCategory ? CATEGORY_DATA[formData.majorCategory][newSubCategory] : '';
-        setFormData(prev => ({
-            ...prev,
-            subCategory: newSubCategory,
-            purpose: newPurpose
-        }));
-    }, [formData.majorCategory]);
+        if (isEditing) {
+            setFormData({
+                payer: editingExpense.payer,
+                date: editingExpense.date,
+                item: editingExpense.item,
+                amount: editingExpense.amount,
+                ratio: editingExpense.ratio,
+                majorCategory: editingExpense.majorCategory,
+                subCategory: editingExpense.subCategory,
+                purpose: editingExpense.purpose,
+            });
+        } else {
+            // 新規作成用のフォームリセット
+            setFormData({
+                payer: PAYERS[0], date: new Date().toISOString().split('T')[0], item: '', amount: '', ratio: 5, majorCategory: '食費', subCategory: '食材', purpose: '消費'
+            });
+        }
+    }, [editingExpense, isEditing]);
+
+    useEffect(() => {
+        // This effect should run when majorCategory changes, but not when in editing mode
+        // to prevent overwriting the existing data being edited.
+        if (formData.majorCategory && !isEditing) {
+             const subCategories = Object.keys(CATEGORY_DATA[formData.majorCategory] || {});
+             const newSubCategory = subCategories[0] || '';
+             const newPurpose = newSubCategory ? CATEGORY_DATA[formData.majorCategory][newSubCategory] : '';
+             setFormData(prev => ({ ...prev, subCategory: newSubCategory, purpose: newPurpose }));
+        }
+    }, [formData.majorCategory, isEditing]);
+
 
     const handleChange = (field, value) => {
         const newData = { ...formData, [field]: value };
-        if (field === 'subCategory') {
+        // Only auto-update purpose if not in editing mode
+        if (field === 'subCategory' && !isEditing) {
             newData.purpose = CATEGORY_DATA[formData.majorCategory][value];
+        } else if (field === 'majorCategory' && !isEditing) {
+             const subCategories = Object.keys(CATEGORY_DATA[value] || {});
+             const newSubCategory = subCategories[0] || '';
+             newData.subCategory = newSubCategory;
+             newData.purpose = newSubCategory ? CATEGORY_DATA[value][newSubCategory] : '';
         }
         setFormData(newData);
     };
@@ -189,14 +278,8 @@ function InputTab() {
         e.preventDefault();
         
         const amountNumber = parseFloat(formData.amount);
-
-        if (!formData.item || !formData.date) {
-            alert('品名と日付は必須バニ！');
-            return;
-        }
-        
-        if (isNaN(amountNumber) || amountNumber <= 0) {
-            alert('金額には0より大きい半角数字を入力するバニ！');
+        if (!formData.item || !formData.date || isNaN(amountNumber) || amountNumber <= 0) {
+            alert('品名、日付、そして0より大きい金額は必須バニ！');
             return;
         }
 
@@ -207,25 +290,36 @@ function InputTab() {
 
         setIsSubmitting(true);
         try {
-            await addDoc(collection(db, "expenses"), {
-                ...formData,
-                amount: amountNumber,
-                createdAt: new Date()
-            });
-            setMessage('登録完了バニ！');
-            setFormData({
-                payer: PAYERS[0], date: new Date().toISOString().split('T')[0], item: '', amount: '', ratio: 5, majorCategory: '食費', subCategory: '食材', purpose: '消費'
-            });
+            const dataToSave = { ...formData, amount: amountNumber, updatedAt: new Date() };
+
+            if (isEditing) {
+                // 更新処理
+                const expenseRef = doc(db, "expenses", editingExpense.id);
+                await updateDoc(expenseRef, dataToSave);
+                setMessage('更新完了バニ！');
+                onClearEditing(); // 編集モードを解除
+            } else {
+                // 新規追加処理
+                dataToSave.createdAt = new Date();
+                await addDoc(collection(db, "expenses"), dataToSave);
+                setMessage('登録完了バニ！');
+                // フォームリセット
+                setFormData({
+                    payer: PAYERS[0], date: new Date().toISOString().split('T')[0], item: '', amount: '', ratio: 5, majorCategory: '食費', subCategory: '食材', purpose: '消費'
+                });
+            }
+            
             setTimeout(() => setMessage(''), 3000);
         } catch (error) {
-            console.error("Error adding document: ", error);
-            alert("登録に失敗しました。");
+            console.error("Error saving document: ", error);
+            alert(isEditing ? "更新に失敗しました。" : "登録に失敗しました。");
         }
         setIsSubmitting(false);
     };
 
     return (
         <div className="bg-white p-8 rounded-xl shadow-lg max-w-2xl mx-auto">
+            <h2 className="text-2xl font-bold text-center text-purple-700 mb-6">{isEditing ? '支出を修正するバニ！' : '支出を登録するバニ！'}</h2>
             <form onSubmit={handleSubmit} className="space-y-6">
                 <FormRow label="支払者" question="支払ったのは誰バニ？">
                     <div className="flex space-x-4">
@@ -258,18 +352,26 @@ function InputTab() {
                     </select>
                 </FormRow>
                 <FormRow label="目的" question="目的は何バニか？">
-                     <p className="bg-gray-100 p-3 rounded text-gray-700 font-semibold">{formData.purpose}</p>
+                    <select value={formData.purpose} onChange={e => handleChange('purpose', e.target.value)} className="form-select w-full">
+                        {PURPOSES.map(p => <option key={p} value={p}>{p}</option>)}
+                    </select>
                 </FormRow>
-                <div className="text-center pt-4">
+                 <div className="text-center pt-4 space-x-4">
                     <button type="submit" disabled={isSubmitting} className="bg-purple-600 hover:bg-purple-800 text-white font-bold py-3 px-8 rounded-full focus:outline-none focus:shadow-outline transition-transform transform hover:scale-105 disabled:bg-gray-400">
-                        {isSubmitting ? '登録中...' : '登録するバニ！'}
+                        {isSubmitting ? (isEditing ? '更新中...' : '登録中...') : (isEditing ? '更新するバニ！' : '登録するバニ！')}
                     </button>
+                    {isEditing && (
+                        <button type="button" onClick={onClearEditing} className="bg-gray-400 hover:bg-gray-600 text-white font-bold py-3 px-8 rounded-full">
+                            キャンセル
+                        </button>
+                    )}
                     {message && <p className="text-green-500 font-bold mt-4">{message}</p>}
                 </div>
             </form>
         </div>
     );
 }
+
 
 const FormRow = ({ label, question, children }) => (
     <div>
@@ -317,13 +419,10 @@ function InquiryTab({ expenses }) {
     });
 
     const filteredExpenses = useMemo(() => {
-        // --- ▼ここからが日付修正箇所▼ ---
         const startDate = new Date(period.startYear, period.startMonth - 1, 1);
-        const endDate = new Date(period.endYear, period.endMonth, 0, 23, 59, 59); // 月末日の23:59:59に設定
-        // --- ▲ここまでが日付修正箇所▲ ---
+        const endDate = new Date(period.endYear, period.endMonth, 0, 23, 59, 59);
         return expenses.filter(ex => {
             const exDate = new Date(ex.date);
-            // タイムゾーンを考慮するため、入力された日付文字列をUTCとして解釈し直す
             const adjustedExDate = new Date(exDate.getUTCFullYear(), exDate.getUTCMonth(), exDate.getUTCDate());
             return adjustedExDate >= startDate && adjustedExDate <= endDate;
         });
@@ -390,7 +489,7 @@ const ChartCard = ({ title, data }) => (
     </div>
 );
 
-function HistoryTab({ expenses, settlements }) {
+function HistoryTab({ expenses, settlements, onEdit }) {
     const [period, setPeriod] = useState({
         startYear: new Date().getFullYear(), startMonth: 1,
         endYear: new Date().getFullYear(), endMonth: 12,
@@ -398,21 +497,30 @@ function HistoryTab({ expenses, settlements }) {
     const [selectedIds, setSelectedIds] = useState(new Set());
 
     const filteredExpenses = useMemo(() => {
-        // --- ▼ここからが日付修正箇所▼ ---
         const startDate = new Date(period.startYear, period.startMonth - 1, 1);
-        const endDate = new Date(period.endYear, period.endMonth, 0, 23, 59, 59); // 月末日の23:59:59に設定
-        // --- ▲ここまでが日付修正箇所▲ ---
+        const endDate = new Date(period.endYear, period.endMonth, 0, 23, 59, 59);
         return expenses.filter(ex => {
             const exDate = new Date(ex.date);
-            // タイムゾーンを考慮するため、入力された日付文字列をUTCとして解釈し直す
             const adjustedExDate = new Date(exDate.getUTCFullYear(), exDate.getUTCMonth(), exDate.getUTCDate());
             return adjustedExDate >= startDate && adjustedExDate <= endDate;
         });
     }, [expenses, period]);
 
     const unsettledMonths = useMemo(() => {
-        const months = new Set(expenses.map(ex => ex.date.substring(0, 7)));
-        return Array.from(months).filter(month => !settlements[month]).sort().reverse();
+        const allMonths = new Set(expenses.map(ex => ex.date.substring(0, 7)));
+        const startYear = 2025;
+        const startMonth = 8;
+        const now = new Date();
+        const currentYear = now.getFullYear();
+        const currentMonth = now.getMonth() + 1;
+        for (let y = startYear; y <= currentYear; y++) {
+            const M1 = (y === startYear) ? startMonth : 1;
+            const M2 = (y === currentYear) ? currentMonth : 12;
+            for (let m = M1; m <= M2; m++) {
+                allMonths.add(`${y}-${String(m).padStart(2, '0')}`);
+            }
+        }
+        return Array.from(allMonths).filter(month => !settlements[month]).sort().reverse();
     }, [expenses, settlements]);
     
     const handleSettleMonth = async (monthKey) => {
@@ -475,7 +583,7 @@ function HistoryTab({ expenses, settlements }) {
                         <thead className="text-xs text-gray-700 uppercase bg-purple-100">
                             <tr>
                                 <th className="p-4"><input type="checkbox" onChange={e => setSelectedIds(e.target.checked ? new Set(filteredExpenses.map(ex => ex.id)) : new Set())}/></th>
-                                {['日付', '品名', '金額', '支払者', '負担割合', '大種別', '種別', '目的'].map(h => <th key={h} className="px-6 py-3">{h}</th>)}
+                                {['日付', '品名', '金額', '支払者', '負担割合', '大種別', '種別', '目的', '操作'].map(h => <th key={h} className="px-6 py-3">{h}</th>)}
                             </tr>
                         </thead>
                         <tbody>
@@ -490,6 +598,9 @@ function HistoryTab({ expenses, settlements }) {
                                     <td className="px-6 py-4">{ex.majorCategory}</td>
                                     <td className="px-6 py-4">{ex.subCategory}</td>
                                     <td className="px-6 py-4">{ex.purpose}</td>
+                                    <td className="px-6 py-4">
+                                        <button onClick={() => onEdit(ex)} className="font-medium text-blue-600 hover:underline">編集</button>
+                                    </td>
                                 </tr>
                             ))}
                         </tbody>
@@ -500,5 +611,4 @@ function HistoryTab({ expenses, settlements }) {
         </div>
     );
 }
-
 
